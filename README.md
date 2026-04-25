@@ -243,19 +243,6 @@ JSON output includes additional structured information:
 | 30 | No evidence available (gene not curated) |
 | 40 | Dosage sensitivity unlikely (benign evidence) |
 
-## Helper Tool: convert_cnr.py
-
-Convert CNVkit .cnr files to standard BED format:
-
-```bash
-python convert_cnr.py input.cnr output.bed [min_size]
-```
-
-- `min_size`: Minimum CNV size filter (default: 10000 bp)
-- Uses log2 thresholds: <-0.6 = Deletion, >0.4 = Amplification
-- Merges adjacent regions with same status
-- Outputs both BED and detailed TSV files
-
 ## Example
 
 ```bash
@@ -264,10 +251,6 @@ python cnvanno.py test/test_input.bed -o results.tsv -g GRCh38
 
 # JSON output for programmatic access
 python cnvanno.py test/test_input.bed -o results.json -f json -g GRCh38
-
-# Convert CNVkit output first
-python convert_cnr.py proband.cnvkit.cnr proband.bed 50000
-python cnvanno.py proband.bed -o proband_anno.tsv
 ```
 
 ## Limitations
