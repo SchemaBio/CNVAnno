@@ -14,7 +14,19 @@ A comprehensive CNV (Copy Number Variant) pathogenicity annotation tool based on
 
 ## Installation
 
-### Requirements
+### Option 1: Docker (Recommended)
+
+```bash
+# Build image
+docker build -t cnvanno:latest .
+
+# Run with data mounted
+docker run -v /path/to/data:/app/data cnvanno:latest input.bed -o output.tsv -g GRCh38
+```
+
+### Option 2: Direct Installation
+
+#### Requirements
 
 ```bash
 pip install pandas openpyxl intervaltree
@@ -39,6 +51,7 @@ Download the following databases to the `data/` directory:
 | Gencode Exons | `Gencode.{build}.cnvkit.target.bed` | Exon coordinates for partial overlap analysis |
 | gnomAD CNV | `gnomad.v4.1.cnv.all.{build}.vcf.gz` | Population CNV frequencies |
 | DECIPHER | `population_cnv_{build}.txt.gz` | Population CNV frequencies from DECIPHER |
+| UCSC Cytoband | `cytoBand_{build}.txt` | Chromosome band coordinates for ISCN formatting |
 
 Replace `{build}` with `GRCh37` or `GRCh38` based on your genome build.
 
@@ -48,6 +61,7 @@ Replace `{build}` with `GRCh37` or `GRCh38` based on your genome build.
 - Gencode: https://www.gencodegenes.org/
 - gnomAD CNV: https://gnomad.broadinstitute.org/
 - DECIPHER: https://decipher.sanger.ac.uk/
+- UCSC Cytoband: https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz (GRCh38) or https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/cytoBand.txt.gz (GRCh37)
 
 ## Usage
 
@@ -191,6 +205,7 @@ Requires manual input for:
 | Column | Description |
 |--------|-------------|
 | `#Chromosome`, `Start`, `End`, `Size`, `Status` | CNV basic information |
+| `ISCN` | ISCN standard nomenclature (e.g., `seq[GRCh38] 1p36.33p36.11(827144_27147702)del`) |
 | `Gene_Count` | Number of overlapping genes |
 | `HI_Max` | Maximum HI score among overlapping genes |
 | `TR_Max` | Maximum TR score among overlapping genes |

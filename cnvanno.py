@@ -343,6 +343,65 @@ class CNVAnnotation:
     overall_classification: str = "Uncertain Significance"
     classification_reason: str = ""
 
+    # ISCN标准命名
+    iscn: str = ""
+
+
+# ============================================================================
+# ISCN格式化器
+# ============================================================================
+
+class ISCNFormatter:
+    """生成ISCN标准命名格式"""
+
+    def __init__(self, genome_build: str = "GRCh38"):
+        self.genome_build = genome_build
+
+    def format_iscn(self, chrom: str, start: int, end: int, status: str,
+                    start_cytoband: str = "", end_cytoband: str = "") -> str:
+        """
+        生成ISCN标准命名
+
+        Args:
+            chrom: 染色体号 (如 "1", "chr1", "X")
+            start: 起始坐标
+            end: 终止坐标
+            status: CNV状态 (Deletion/Amplification等)
+            start_cytoband: 起始位置的cytoband
+            end_cytoband: 终止位置的cytoband
+
+        Returns:
+            ISCN格式字符串
+        """
+        # 标准化染色体号
+        chrom_clean = chrom.replace("chr", "")
+
+        # 确定CNV类型
+        if status.lower() in ["deletion", "del", "loss"]:
+            cnv_type = "del"
+        elif status.lower() in ["amplification", "dup", "duplication", "gain"]:
+            cnv_type = "dup"
+        else:
+            cnv_type = "cnv"  # 其他类型用通用cnv表示
+
+        # 构建ISCN
+        # 格式: seq[GRCh38] 染色体号(起始_终止)del 或 带号写法
+        build_name = self.genome_build
+
+        if start_cytoband and end_cytoband:
+            # 有cytoband信息，使用带号写法
+            # 简化带号：如果起止在同一带，只写一个带号
+            if start_cytoband == end_cytoband:
+                band_part = f"{chrom_clean}{start_cytoband}"
+            else:
+                band_part = f"{chrom_clean}{start_cytoband}{end_cytoband}"
+            iscn = f"seq[{build_name}] {band_part}({start}_{end}){cnv_type}"
+        else:
+            # 无cytoband信息，使用简写格式
+            iscn = f"seq[{build_name}] {chrom_clean}({start}_{end}){cnv_type}"
+
+        return iscn
+
 
 # ============================================================================
 # 数据库加载器
@@ -364,19 +423,13 @@ class DatabaseLoader:
         self.exon_data: Dict[str, List[ExonInfo]] = defaultdict(list)  # 按基因存储
         self.gene_exon_count: Dict[str, int] = {}  # 每个基因的外显子总数
 
-        self.gene_interval_trees: Dict[str, IntervalTree] = defaultdict(IntervalTree)
-        self.region_interval_trees: Dict[str, IntervalTree] = defaultdict(IntervalTree)
-        self.benign_interval_trees: Dict[str, IntervalTree] = defaultdict(IntervalTree)
-        self.exon_interval_trees: Dict[str, IntervalTree] = defaultdict(IntervalTree)  # 外显子区间树
-        self.gnomad_interval_trees: Dict[str, IntervalTree] = defaultdict(IntervalTree)
-        self.population_interval_trees: Dict[str, IntervalTree] = defaultdict(IntervalTree)
-        self.curated_regions: List[RegionCurationInfo] = []
-        self.gencc_data: Dict[str, List[GenCCInfo]] = defaultdict(list)
-        self.benign_regions: List[RegionCurationInfo] = []  # HI/TR=40的区域
+        # Cytoband数据 (用于ISCN格式化)
+        self.cytoband_interval_trees: Dict[str, IntervalTree] = defaultdict(IntervalTree)
 
         self.gene_interval_trees: Dict[str, IntervalTree] = defaultdict(IntervalTree)
         self.region_interval_trees: Dict[str, IntervalTree] = defaultdict(IntervalTree)
         self.benign_interval_trees: Dict[str, IntervalTree] = defaultdict(IntervalTree)
+        self.exon_interval_trees: Dict[str, IntervalTree] = defaultdict(IntervalTree)  # 外显子区间树
         self.gnomad_interval_trees: Dict[str, IntervalTree] = defaultdict(IntervalTree)
         self.population_interval_trees: Dict[str, IntervalTree] = defaultdict(IntervalTree)
 
@@ -391,6 +444,7 @@ class DatabaseLoader:
         self._load_curated_regions()
         self._build_region_interval_trees()
         self._load_gencc()
+        self._load_cytoband()  # 加载cytoband数据（用于ISCN格式化）
         self._load_gencode_exons()  # 加载Gencode外显子数据
         self._build_exon_interval_trees()
         self._load_gnomad_cnv()
@@ -564,6 +618,34 @@ class DatabaseLoader:
 
         self.logger.info(f"Loaded GenCC data for {len(self.gencc_data)} genes")
 
+    def _load_cytoband(self):
+        """加载UCSC cytoband数据（用于ISCN格式化）"""
+        cytoband_file = self.data_dir / f"cytoBand_{self.genome_build}.txt"
+        if not cytoband_file.exists():
+            self.logger.warning(f"Cytoband file not found: {cytoband_file}")
+            return
+
+        count = 0
+        with open(cytoband_file) as f:
+            for line in f:
+                parts = line.strip().split('\t')
+                if len(parts) < 4:
+                    continue
+
+                # 格式: chrom, start, end, band_name, gieStain
+                chrom = normalize_chrom(parts[0])
+                start = int(parts[1])
+                end = int(parts[2])
+                band_name = parts[3]  # 如 "p36.33"
+
+                # 构建带号：将染色体号和带名组合，如 "p36.33" -> 用于ISCN
+                # 注意：band_name已经包含p/q信息，ISCN格式需要组合
+                # 例如：chr1 + p36.33 -> 在ISCN中显示为 "1p36.33"
+                self.cytoband_interval_trees[chrom].addi(start, end, band_name)
+                count += 1
+
+        self.logger.info(f"Loaded {count} cytoband records")
+
     def _load_gencode_exons(self):
         """加载Gencode外显子坐标数据"""
         gencode_file = self.data_dir / f"Gencode.{self.genome_build}.cnvkit.target.bed"
@@ -627,6 +709,31 @@ class DatabaseLoader:
             for exon in exons:
                 self.exon_interval_trees[exon.chrom].addi(exon.start, exon.end, exon)
         self.logger.info("Built exon interval trees")
+
+    def get_cytoband(self, chrom: str, position: int) -> str:
+        """
+        根据坐标获取cytoband名称
+
+        Args:
+            chrom: 染色体号 (如 "chr1", "1")
+            position: 基因组坐标
+
+        Returns:
+            cytoband名称 (如 "p36.33")，未找到返回空字符串
+        """
+        chrom = normalize_chrom(chrom)
+        tree = self.cytoband_interval_trees.get(chrom)
+        if not tree:
+            return ""
+
+        # 查找重叠的区间 (使用overlap方法)
+        overlaps = tree.overlap(position, position + 1)
+        if overlaps:
+            # 返回第一个找到的cytoband
+            for interval in overlaps:
+                return interval.data
+
+        return ""
 
     def _load_gnomad_cnv(self):
         """加载gnomAD CNV频率数据"""
@@ -1247,6 +1354,7 @@ class CNVAnnotator:
     def __init__(self, db_loader: DatabaseLoader):
         self.db = db_loader
         self.scorer = ClinGenScorer(db_loader)
+        self.iscn_formatter = ISCNFormatter(db_loader.genome_build)
         self.logger = logging.getLogger(__name__)
 
     def annotate_cnv(self, cnv: CNVRecord) -> CNVAnnotation:
@@ -1256,6 +1364,9 @@ class CNVAnnotator:
         if cnv.status == "Normal":
             annotation.overall_classification = "Benign"
             annotation.classification_reason = "No CNV detected"
+            annotation.iscn = self.iscn_formatter.format_iscn(
+                cnv.chrom, cnv.start, cnv.end, cnv.status, "", ""
+            )
             return annotation
 
         # 执行ClinGen评分
@@ -1264,19 +1375,26 @@ class CNVAnnotator:
         # 补充GenCC信息
         self._annotate_gencc(annotation)
 
+        # 生成ISCN标准命名
+        start_cytoband = self.db.get_cytoband(cnv.chrom, cnv.start)
+        end_cytoband = self.db.get_cytoband(cnv.chrom, cnv.end)
+        annotation.iscn = self.iscn_formatter.format_iscn(
+            cnv.chrom, cnv.start, cnv.end, cnv.status, start_cytoband, end_cytoband
+        )
+
         return annotation
 
     def _annotate_gencc(self, annotation: CNVAnnotation):
         """补充GenCC基因-疾病信息"""
-        supportive_genes = []
+        supportive_genes = set()
         for gene in annotation.overlapping_genes:
             if gene in self.db.gencc_data:
                 for gencc_info in self.db.gencc_data[gene]:
                     annotation.gencc_info.append(gencc_info)
                     # AD遗传模式的基因对CNV更有意义
                     if gencc_info.moi in ["Autosomal dominant", "X-linked"]:
-                        supportive_genes.append(gene)
-        annotation.gencc_supportive_genes = supportive_genes
+                        supportive_genes.add(gene)
+        annotation.gencc_supportive_genes = sorted(supportive_genes)
 
 
 # ============================================================================
@@ -1444,7 +1562,7 @@ class OutputFormatter:
     def _format_tsv(self, annotations: List[CNVAnnotation]) -> str:
         """TSV格式输出"""
         headers = [
-            "#Chromosome", "Start", "End", "Size", "Status",
+            "#Chromosome", "Start", "End", "Size", "Status", "ISCN",
             "Gene_Count", "HI_Max", "TR_Max", "Max_Frequency",
             # ClinGen评分
             "Section1", "Section2", "Section3", "Section4", "Section5", "Total_Score",
@@ -1475,7 +1593,7 @@ class OutputFormatter:
                 benign_overlap = ';'.join([r.region_name for r in benign_regions[:3]])
 
             row = [
-                cnv.chrom, cnv.start, cnv.end, cnv.size, cnv.status,
+                cnv.chrom, cnv.start, cnv.end, cnv.size, cnv.status, ann.iscn,
                 ann.gene_count, ann.hi_max_score, ann.tr_max_score,
                 f"{ann.max_freq:.6f}",
                 # 评分
@@ -1510,7 +1628,8 @@ class OutputFormatter:
                     "start": ann.cnv.start,
                     "end": ann.cnv.end,
                     "size": ann.cnv.size,
-                    "status": ann.cnv.status
+                    "status": ann.cnv.status,
+                    "iscn": ann.iscn
                 },
                 "annotation": {
                     "gene_count": ann.gene_count,
