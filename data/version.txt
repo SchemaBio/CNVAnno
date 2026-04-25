@@ -1,0 +1,25 @@
+# https://search.clinicalgenome.org/kb/downloads
+## Dosage Sensitivity Haploinsufficiency Genes
+GRCh37=20260425
+GRCh38=20260425
+
+## Dosage Sensitivity Triplosensitivity Genes
+GRCh37=20260425
+GRCh38=20260425
+
+## Dosage Sensitivity Curated Region List
+GRCh37=20260425
+GRCh38=20260425
+
+# gnomad cnv
+GRCh37=v4.1Liftover
+GRCh38=v4.1
+
+# GenCC
+gencc-submissions=20260425
+
+# DECIPHER
+## https://www.deciphergenomics.org/files/downloads/population_cnv_grch38.txt.gz
+## https://www.deciphergenomics.org/files/downloads/population_cnv_grch37.txt.gz
+GRCh37=2015Sep
+GRCh38=2015Sep
