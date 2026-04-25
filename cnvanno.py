@@ -11,7 +11,7 @@ CNVAnno - ClinGen规则CNV致病性评分注释器
 - 总分 ≥ 1.99: Likely Pathogenic (可能致病，有些版本)
 
 Author: CNVAnno
-Date: 2025-04-25
+Date: 2026-04-25
 """
 
 import argparse
@@ -218,6 +218,7 @@ class CNVRecord:
     end: int
     status: str  # Deletion/Amplification/Normal
     size: int = 0
+    original_columns: List[str] = field(default_factory=list)  # 保存原始BED的所有列
 
     def __post_init__(self):
         self.size = self.end - self.start
@@ -1404,8 +1405,9 @@ class CNVAnnotator:
 class InputParser:
     """解析输入CNV文件"""
 
-    def __init__(self, genome_build: str = "GRCh38"):
+    def __init__(self, genome_build: str = "GRCh38", cnv_type_col: int = 4):
         self.genome_build = genome_build
+        self.cnv_type_col = cnv_type_col  # CNV类型列位置（从1开始）
         self.logger = logging.getLogger(__name__)
 
     def parse_file(self, input_file: str) -> List[CNVRecord]:
@@ -1447,7 +1449,7 @@ class InputParser:
         return cnvs
 
     def _parse_bed(self, input_file: str) -> List[CNVRecord]:
-        """解析BED格式(4列)"""
+        """解析BED格式，前三列固定为chrom、start、end，CNV类型列通过参数指定"""
         cnvs = []
 
         with open(input_file) as f:
@@ -1455,17 +1457,25 @@ class InputParser:
                 if line.startswith('#') or line.startswith('track') or line.strip() == '':
                     continue
                 parts = line.strip().split('\t')
-                if len(parts) < 4:
+                if len(parts) < 3:
                     continue
-                if parts[1] == 'start' or parts[2] == 'end' or parts[3] == 'status':
+                # 跳过可能的header行
+                if parts[1] == 'start' or parts[2] == 'end':
                     continue
 
                 chrom = parts[0]
                 start = int(parts[1])
                 end = int(parts[2])
-                status = parts[3].strip()
 
-                cnvs.append(CNVRecord(chrom=chrom, start=start, end=end, status=status))
+                # 根据参数获取CNV类型列
+                status = "Uncertain"  # 默认值
+                if self.cnv_type_col > 0 and len(parts) >= self.cnv_type_col:
+                    status = parts[self.cnv_type_col - 1].strip()  # 从1开始计数
+
+                cnvs.append(CNVRecord(
+                    chrom=chrom, start=start, end=end, status=status,
+                    original_columns=parts  # 保存原始所有列
+                ))
 
         return cnvs
 
@@ -1560,10 +1570,10 @@ class OutputFormatter:
             return self._format_tsv(annotations)
 
     def _format_tsv(self, annotations: List[CNVAnnotation]) -> str:
-        """TSV格式输出"""
-        headers = [
-            "#Chromosome", "Start", "End", "Size", "Status", "ISCN",
-            "Gene_Count", "HI_Max", "TR_Max", "Max_Frequency",
+        """TSV格式输出 - 保留原始BED列，追加注释结果"""
+        # 注释列的header
+        annotation_headers = [
+            "ISCN", "Gene_Count", "HI_Max", "TR_Max", "Max_Frequency",
             # ClinGen评分
             "Section1", "Section2", "Section3", "Section4", "Section5", "Total_Score",
             # 证据标记
@@ -1575,7 +1585,7 @@ class OutputFormatter:
             "GenCC_AD_Genes", "Classification", "Reason", "Evidence_Details"
         ]
 
-        lines = ['\t'.join(headers)]
+        lines = []
 
         for ann in annotations:
             cnv = ann.cnv
@@ -1592,8 +1602,9 @@ class OutputFormatter:
                 benign_regions = self.db.query_benign_regions_by_interval(cnv.chrom, cnv.start, cnv.end)
                 benign_overlap = ';'.join([r.region_name for r in benign_regions[:3]])
 
-            row = [
-                cnv.chrom, cnv.start, cnv.end, cnv.size, cnv.status, ann.iscn,
+            # 注释结果列
+            annotation_row = [
+                ann.iscn,
                 ann.gene_count, ann.hi_max_score, ann.tr_max_score,
                 f"{ann.max_freq:.6f}",
                 # 评分
@@ -1614,7 +1625,29 @@ class OutputFormatter:
                 '; '.join(ev.evidence_details[:20])
             ]
 
-            lines.append('\t'.join(str(x) for x in row))
+            # 组合输出行：原始BED列 + 注释列
+            if cnv.original_columns:
+                output_row = cnv.original_columns + [str(x) for x in annotation_row]
+            else:
+                # 如果没有原始列信息，使用基本列
+                output_row = [cnv.chrom, str(cnv.start), str(cnv.end), cnv.status, str(cnv.size)] + [str(x) for x in annotation_row]
+
+            lines.append('\t'.join(output_row))
+
+        # 生成header行
+        if annotations and annotations[0].cnv.original_columns:
+            # 使用原始BED的列数作为基础header
+            num_original_cols = len(annotations[0].cnv.original_columns)
+            original_headers = [f"Col{i+1}" for i in range(num_original_cols)]
+            # 前三列特殊命名
+            original_headers[0] = "Chromosome"
+            original_headers[1] = "Start"
+            original_headers[2] = "End"
+        else:
+            original_headers = ["Chromosome", "Start", "End", "Status", "Size"]
+
+        header_line = '\t'.join(original_headers + annotation_headers)
+        lines.insert(0, header_line)
 
         return '\n'.join(lines)
 
@@ -1707,17 +1740,22 @@ Classification:
   Total >= 1.00: Pathogenic
 
 Usage:
-  cnvanno input.bed -o output.tsv
-  cnvanno input.bed -g GRCh37 -o output.tsv
+  cnvanno input.bed -o output.tsv                      # default: column 4 is CNV type
+  cnvanno input.bed -c 5 -o output.tsv                 # column 5 is CNV type
+  cnvanno input.bed -c 0 -o output.tsv                 # no CNV type column, treat as Uncertain
+  cnvanno input.bed -g GRCh37 -c 4 -o output.tsv       # use GRCh37 genome build
         """
     )
 
-    parser.add_argument('input', help='Input CNV file (4 columns: chrom, start, end, status)')
+    parser.add_argument('input', help='Input CNV file (BED format, first 3 columns: chrom, start, end)')
     parser.add_argument('-d', '--data-dir', default='data', help='Database directory')
     parser.add_argument('-g', '--genome-build', default='GRCh38', choices=['GRCh37', 'GRCh38'])
     parser.add_argument('-o', '--output', required=True, help='Output file')
     parser.add_argument('-f', '--format', default='tsv', choices=['tsv', 'json'])
     parser.add_argument('-l', '--log-level', default='INFO')
+    parser.add_argument('-c', '--cnv-type-col', type=int, default=4,
+                        help='Column number for CNV type (DUP/DEL etc). Default: 4 (1-based). '
+                             'Use 0 to treat all as Uncertain type')
 
     args = parser.parse_args()
     setup_logging(args.log_level)
@@ -1736,7 +1774,7 @@ Usage:
 
     # 解析输入
     logger.info(f"Parsing input: {args.input}")
-    input_parser = InputParser(args.genome_build)
+    input_parser = InputParser(args.genome_build, args.cnv_type_col)
     cnvs = input_parser.parse_file(args.input)
 
     # 注释CNV
